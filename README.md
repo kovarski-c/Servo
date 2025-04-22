@@ -1,8 +1,13 @@
-# Servo
-C++ kód slouží k ovládání servomotoru NEMA 23 pomocí driveru TMC2209 skrze webové rozhraní na adrese http://192.168.4.1.
+# Ovládání krokového motoru NEMA 23 přes webové rozhraní (ESP32 + TMC2209)
 
-Pro přístup k adrese je nutné se nejprve připojit k WiFi síti produkované mikrokontrolérem:
+Tento projekt umožňuje ovládání krokového motoru NEMA 23 pomocí driveru TMC2209, řízeného mikrokontrolérem ESP32. Ovládání probíhá přes jednoduché webové rozhraní dostupné na adrese http://192.168.4.1.
+
+## Připojení k zařízení
+Před otevřením webového rozhraní je třeba se připojit k WiFi síti, kterou ESP32 vytváří:
 - SSID: ESP32
 - Heslo: 12345678
 
-V případě, že stránka zobrazuje `Not found`, zkontrolujte, zda stránka nehlásí, že _Připojení není zabezpečené_. V podrobnostech zvolte možnost _ignorovat_.
+## Poznámka
+Pokud se webová stránka nenačítá nebo zobrazuje `Not found`, zkontrolujte, zda prohlížeč nehlásí „Připojení není zabezpečené“. V takovém případě potvrďte výjimku (např. možnost „Přejít i přesto“ nebo „Ignorovat varování“), abyste mohli pokračovat.
+
+
