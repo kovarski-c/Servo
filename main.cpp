@@ -3,15 +3,18 @@
 #include <esp_timer.h>
 #include <driver/gpio.h>
 #include <esp_task_wdt.h>
+#include <TMCStepper.h>
 
 // --- Nastavení pinů ---
-const int DIR       = 33;
-const int PUL       = 32;
-const int EN        = 25;
+#define DIR_PIN       33
+#define STEP_PIN      32
+#define EN_PIN        25
+#define RX_PIN        27
+#define TX_PIN        26
+#define DRIVER_ADDRESS 0b00
+
 const int endstopF  = 14;
 const int endstopB  = 12;
-const int MS1       = 26;
-const int MS2       = 27;
 
 // --- Parametry motoru ---
 int microStep = 8;
@@ -21,12 +24,13 @@ volatile int revsCount = 0;
 volatile bool motorRunning = false;
 volatile bool motorPaused  = false;
 
+TMC2209Stepper driver(&Serial2, 0.11f, DRIVER_ADDRESS);
+
 // --- WiFi a web server ---
 AsyncWebServer server(80);
 const char *ssid = "ESP32";
 const char *password = "12345678";
 
-// HTML kód zůstává nezměněn
 const char htmlPage[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML lang="cs">
 <html>
@@ -152,6 +156,7 @@ const char htmlPage[] PROGMEM = R"rawliteral(
       }
     }
 
+
     function updateCycles() {
         fetch('/cycles')
             .then(response => response.text())
@@ -182,9 +187,10 @@ const char htmlPage[] PROGMEM = R"rawliteral(
     <label>Vzdálenost (cm):</label>
     <input type="number" pattern="\d*" inputmode="numeric" step="0.1" id="distance" value="5"><br>
     <label>Rychlost (mm/s):</label>
-    <input type="number" pattern="\d*" inputmode="numeric" step="0.1" id="speed" value="10"><br>
+    <input type="number" pattern="\d*" inputmode="numeric" step="0.1" id="speed" value="8"><br>
     <label>Počet cyklů:</label>
     <input type="number" pattern="\d*" inputmode="numeric" id="cycles" value="1"><br>
+
 
     <button class="start" id="start" onclick="handleStartInterrupt()">Start</button>
     <button class="stop" id="pause" onclick="sendCommand(motorPaused ? 'continued' : 'paused')" disabled>Pauza</button>
@@ -207,28 +213,24 @@ void wifiSetup() {
   Serial.println(WiFi.softAPIP());
 }
 
-// --- Přesun firemní smyčky na výchozí polohu ---
 void goToDefault(int pause = 10000 / (8 * 2 * microStep)) {
-  digitalWrite(DIR, LOW);
-  // Smyčka běží, dokud nenarazíme na přední spínač
+  digitalWrite(DIR_PIN, LOW);
   while (digitalRead(endstopF) == HIGH && motorRunning) {
     if (motorPaused) {
       vTaskDelay(1 / portTICK_PERIOD_MS);
     } else {
-      digitalWrite(PUL, HIGH);
+      digitalWrite(STEP_PIN, HIGH);
       delayMicroseconds(pause);
-      digitalWrite(PUL, LOW);
+      digitalWrite(STEP_PIN, LOW);
       delayMicroseconds(pause);
     }
-    // Uvolnit RTOS a nakrmit watchdog
     taskYIELD();
     esp_task_wdt_reset();
   }
 }
 
-// --- Jeden běh motoru ---
 void servoRun(int pause, int revs) {
-  digitalWrite(DIR, HIGH);
+  digitalWrite(DIR_PIN, HIGH);
   revsCount = revs;
   while (revsCount > 0 && motorRunning) {
     if (motorPaused) {
@@ -238,9 +240,9 @@ void servoRun(int pause, int revs) {
         Serial.println("Max distance reached! Stopping.");
         break;
       }
-      digitalWrite(PUL, HIGH);
+      digitalWrite(STEP_PIN, HIGH);
       delayMicroseconds(pause);
-      digitalWrite(PUL, LOW);
+      digitalWrite(STEP_PIN, LOW);
       delayMicroseconds(pause);
       revsCount--;
     }
@@ -249,11 +251,9 @@ void servoRun(int pause, int revs) {
   }
 }
 
-// --- FreeRTOS task pro ovládání motoru ---
 void servoRunTask(void *parameter) {
-  // Přidáme tento task do WDT
   esp_task_wdt_add(NULL);
-  digitalWrite(EN, LOW);
+  digitalWrite(EN_PIN, LOW);
 
   while (cycleCount > 0 && motorRunning) {
     servoRun(Pause_const, Revs_const);
@@ -262,13 +262,11 @@ void servoRunTask(void *parameter) {
       cycleCount--;
       revsCount = Revs_const;
     }
-    // Krátce počkat pro stabilitu a feed WDT
     vTaskDelay(1);
     esp_task_wdt_reset();
   }
 
-  // Dokončeno: vypnout driver a odebrat z WDT
-  digitalWrite(EN, HIGH);
+  digitalWrite(EN_PIN, HIGH);
   motorRunning = false;
   esp_task_wdt_delete(NULL);
   vTaskDelete(NULL);
@@ -276,6 +274,16 @@ void servoRunTask(void *parameter) {
 
 void setup() {
   Serial.begin(115200);
+  Serial2.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);
+
+  driver.begin();
+  driver.rms_current(800);
+  driver.microsteps(microStep);
+  driver.en_spreadCycle(false);
+  driver.pdn_disable(true);
+  driver.I_scale_analog(false);
+  driver.toff(8);
+
   // Inicializace WDT: timeout 10s, bez panic
   esp_task_wdt_config_t wdt_config = {
     .timeout_ms     = 10000,
@@ -283,17 +291,13 @@ void setup() {
     .trigger_panic  = false                          // bez paniku‑handleru
   };
 
-  pinMode(PUL, OUTPUT);
-  pinMode(DIR, OUTPUT);
-  pinMode(EN, OUTPUT);
-  pinMode(MS1, OUTPUT);
-  pinMode(MS2, OUTPUT);
+  pinMode(STEP_PIN, OUTPUT);
+  pinMode(DIR_PIN, OUTPUT);
+  pinMode(EN_PIN, OUTPUT);
   pinMode(endstopF, INPUT_PULLUP);
   pinMode(endstopB, INPUT_PULLUP);
 
-  digitalWrite(EN, HIGH);
-  digitalWrite(MS1, LOW);
-  digitalWrite(MS2, LOW);
+  digitalWrite(EN_PIN, HIGH);
 
   wifiSetup();
 
@@ -319,22 +323,22 @@ void setup() {
 
             cycleCount = Cycles_const;
             revsCount  = Revs_const;
-            digitalWrite(EN, LOW);
+            digitalWrite(EN_PIN, LOW);
             goToDefault();
             xTaskCreatePinnedToCore(servoRunTask, "MotorTask", 4096, NULL, 3, NULL, 1);
         } 
         else if (state == "paused") {
             motorPaused = true;
-            digitalWrite(EN, HIGH);
+            digitalWrite(EN_PIN, HIGH);
         } 
         else if (state == "continued") {
             motorPaused = false;
-            digitalWrite(EN, LOW);
+            digitalWrite(EN_PIN, LOW);
         }
         else if (state == "interrupt") {
           motorRunning = false;
           motorPaused = false;
-          digitalWrite(EN, HIGH);
+          digitalWrite(EN_PIN, HIGH);
           goToDefault(Pause_const);
       }
     }
