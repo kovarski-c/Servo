@@ -1,4 +1,4 @@
-# Ovládání krokového motoru NEMA 23 přes webové rozhraní (ESP32 + TMC2209)
+# Zařízení pro testování textilních antén
 
 Tento projekt umožňuje ovládání krokového motoru NEMA 23 pomocí driveru TMC2209, řízeného mikrokontrolérem ESP32. Ovládání probíhá přes webové rozhraní dostupné na adrese http://192.168.4.1.
 
